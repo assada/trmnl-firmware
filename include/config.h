@@ -102,6 +102,14 @@ enum WIFI_CONNECT_RETRY_TIME // Time to sleep before trying to connect to the Wi
 #define PIN_INTERRUPT 3         //the green button
 #define PIN_VBAT_SWITCH 21      //load switch enable pin for battery voltage measurement
 #define VBAT_SWITCH_LEVEL HIGH  //load switch enable pin active level
+#elif defined(BOARD_M5PAPER_S3)
+#define DEVICE_MODEL "m5paper_s3"
+#define PIN_INTERRUPT 0
+#define PIN_BUZZER 21
+#define PIN_USB_DETECT 5
+#define PIN_TOUCH_INT 48
+#define PIN_TOUCH_SDA 41
+#define PIN_TOUCH_SCL 42
 #endif
 
 #if defined(BOARD_XIAO_EPAPER_DISPLAY) || defined(BOARD_SEEED_RETERMINAL_E1001)
@@ -118,6 +126,6 @@ enum WIFI_CONNECT_RETRY_TIME // Time to sleep before trying to connect to the Wi
 #define BUTTON_DOUBLE_CLICK_WINDOW 800
 
 #define SERVER_MAX_RETRIES 3
-#define API_BASE_URL "https://trmnl.app"
+#define API_BASE_URL "https://trmnl.app" //#define API_BASE_URL "http://192.168.100.46:4567"
 
 #endif

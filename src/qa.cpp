@@ -7,7 +7,9 @@
 #include <Preferences.h>
 #include "WifiCaptive.h"
 #include "logo_small.h"
+#if !defined(BOARD_TRMNL_X) && !defined(BOARD_M5PAPER_S3)
 #include "bb_epaper.h"
+#endif
 
 extern "C" {
   #include "esp_timer.h"   // esp_timer_get_time()
@@ -141,9 +143,10 @@ bool startQA(){
   memset(buffer, 255, 48000);
   display_init();
 
-  // Disable light sleep before display operation to prevent workflow interruption
   display_set_light_sleep(false);
+#if !defined(BOARD_TRMNL_X) && !defined(BOARD_M5PAPER_S3)
   bbepSetLightSleep(false);
+#endif
 
   display_show_msg(const_cast<uint8_t *>(logo_small),QA_START);
 
@@ -205,9 +208,10 @@ bool startQA(){
 
   }
 
-  // Re-enable light sleep after QA test completes
   display_set_light_sleep(true);
+#if !defined(BOARD_TRMNL_X) && !defined(BOARD_M5PAPER_S3)
   bbepSetLightSleep(true);
+#endif
 
   savePassedTest();
     while (1){

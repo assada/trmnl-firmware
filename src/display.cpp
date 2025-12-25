@@ -6,7 +6,7 @@
 #include <Preferences.h>
 #include <preferences_persistence.h>
 #include "DEV_Config.h"
-#ifndef BOARD_TRMNL_X
+#if !defined(BOARD_TRMNL_X) && !defined(BOARD_M5PAPER_S3)
 #define BB_EPAPER
 #include "bb_epaper.h"
 #define MAX_BIT_DEPTH 2
@@ -17,7 +17,7 @@ const DISPLAY_PROFILE dpList[4] = { // 1-bit and 2-bit display types for each pr
 };
 BBEPAPER bbep(EP75_800x480);
 // Counts the number of partial updates to know when to do a full update
-#else
+#elif defined(BOARD_TRMNL_X) || defined(BOARD_M5PAPER_S3)
 #include "FastEPD.h"
 FASTEPD bbep;
 #define MAX_BIT_DEPTH 8
@@ -57,6 +57,11 @@ extern Preferences preferences;
 extern ApiDisplayResult apiDisplayResult;
 uint32_t iTempProfile;
 static uint8_t *pDither;
+#ifndef BB_EPAPER
+static int g_png_offset_x = 0;
+static int g_png_offset_y = 0;
+static int g_png_width = 0;
+#endif
 
 // Runtime control for light sleep (true = enabled, false = disabled)
 static bool g_light_sleep_enabled = true;
@@ -74,8 +79,16 @@ void display_init(void)
 #ifdef BB_EPAPER
     bbep.initIO(EPD_DC_PIN, EPD_RST_PIN, EPD_BUSY_PIN, EPD_CS_PIN, EPD_MOSI_PIN, EPD_SCK_PIN, 8000000);
     bbep.setPanelType(dpList[iTempProfile].OneBit);
-#else
-    bbep.initPanel(BB_PANEL_EPDIY_V7_16); //, 26000000);
+#elif defined(BOARD_M5PAPER_S3)
+    Log_info("PSRAM size: %d bytes", ESP.getPsramSize());
+    Log_info("Free PSRAM: %d bytes", ESP.getFreePsram());
+    int rc = bbep.initPanel(BB_PANEL_M5PAPERS3);
+    Log_info("initPanel returned %d", rc);
+    if (rc == 0) {
+        bbep.setMode(BB_MODE_4BPP);
+    }
+#elif defined(BOARD_TRMNL_X)
+    bbep.initPanel(BB_PANEL_EPDIY_V7_16);
     bbep.setPanelSize(1872, 1404, BB_PANEL_FLAG_MIRROR_X);
 #endif
     Log_info("dev module end");
@@ -118,6 +131,9 @@ void display_sleep(uint32_t u32Millis)
 void display_reset(void)
 {
     Log_info("e-Paper Clear start");
+#ifndef BB_EPAPER
+    bbep.setMode(BB_MODE_4BPP);
+#endif
     bbep.fillScreen(BBEP_WHITE);
 #ifdef BB_EPAPER
     if (!apiDisplayResult.response.maximum_compatibility) {
@@ -129,7 +145,6 @@ void display_reset(void)
     bbep.fullUpdate();
 #endif
     Log_info("e-Paper Clear end");
-    // DEV_Delay_ms(500);
 }
 
 /**
@@ -495,133 +510,53 @@ int png_draw(PNGDRAW *pDraw)
     uint8_t uc = 0;
     uint8_t ucMask, src, *s, *d;
     int iPitch;
+    int destY = pDraw->y + g_png_offset_y;
+
+    if (destY < 0 || destY >= bbep.height()) return 1;
 
     s = (uint8_t *)pDraw->pPixels;
     d = bbep.currentBuffer();
     iPitch = bbep.width()/2;
     if (pDraw->iBpp == 1) {
-        if (bbep.width() == pDraw->iWidth) { // normal orientation
-            iPitch = (bbep.width() + 7)/8;
-            d += pDraw->y * iPitch; // point to the correct line
-            memcpy(d, s, (pDraw->iWidth+7)/8);
-        } else { // rotated
-            uint8_t ucPixel, ucMask, j;
-            d += (bbep.height() - 1) * iPitch;
-            d += (pDraw->y / 8);
-            ucMask = 0x80 >> (pDraw->y & 7); // destination mask
-            for (x=0; x<pDraw->iWidth; x++) {
-                if ((x & 7) == 0) uc = *s++;
-                ucPixel = d[0] & ~ucMask; // unset old pixel
-                if (uc & 0x80) ucPixel |= ucMask;
-                d[0] = ucPixel;
-                uc <<= 1;
-                d -= iPitch;
+        iPitch = (bbep.width() + 7)/8;
+        d += destY * iPitch;
+        d += g_png_offset_x / 8;
+        int srcBytes = (pDraw->iWidth + 7) / 8;
+        int shiftBits = g_png_offset_x & 7;
+        if (shiftBits == 0) {
+            memcpy(d, s, srcBytes);
+        } else {
+            for (x = 0; x < srcBytes; x++) {
+                d[x] |= (s[x] >> shiftBits);
+                if (x + 1 < iPitch - (g_png_offset_x / 8)) {
+                    d[x + 1] |= (s[x] << (8 - shiftBits));
+                }
             }
         }
     } else if (pDraw->iBpp == 2) { // we need to convert the 2-bit data into 4-bits
         iPitch = bbep.width()/2;
-        if (bbep.width() == pDraw->iWidth) { // normal orientation
-            for (x=0; x<pDraw->iWidth; x+=4) {
-                src = *s++;
-                uc = (src & 0xc0); // first pixel
-                uc |= ((src & 0x30) >> 2);
-                *d++ = uc;
-                uc = (src & 0xc) << 4;
-                uc |= ((src & 0x3) << 2);
-                *d++ = uc;
-            } // for x
-        } else { // rotated
-            d += (bbep.height() - 1) * iPitch;
-            d += (pDraw->y / 2);
-            if (pDraw->y & 1) { // odd line (column)
-                for (x=0; x<pDraw->iWidth; x+=4) {
-                    uc = (d[0] & 0xf0) | ((s[0] >> 4) & 0x0c);
-                    *d = uc;
-                    d -= iPitch;
-                    uc = (d[0] & 0xf0) | ((s[0] >> 2) & 0x0c);
-                    *d = uc;
-                    d -= iPitch;
-                    uc = (d[0] & 0xf0) | (s[0] & 0xc);
-                    *d = uc;
-                    d -= iPitch;
-                    uc = (d[0] & 0xf0) | ((s[0] << 2) & 0x0c);
-                    *d = uc;
-                    d -= iPitch;
-                    s++;
-                } // for x
-            } else {
-                for (x=0; x<pDraw->iWidth; x+=4) {
-                    uc = (d[0] & 0xf) | (s[0] & 0xc0);
-                    *d = uc;
-                    d -= iPitch;
-                    uc = (d[0] & 0xf) | ((s[0] << 2) & 0xc0);
-                    *d = uc;
-                    d -= iPitch;
-                    uc = (d[0] & 0xf) | ((s[0] << 4) & 0xc0);
-                    *d = uc;
-                    d -= iPitch;
-                    uc = (d[0] & 0xf) | ((s[0] << 6) & 0xc0);
-                    *d = uc;
-                    d -= iPitch;
-                    s++;
-                } // for x
-            }
+        d += destY * iPitch;
+        d += g_png_offset_x / 2;
+        for (x=0; x<pDraw->iWidth; x+=4) {
+            src = *s++;
+            uc = (src & 0xc0);
+            uc |= ((src & 0x30) >> 2);
+            *d++ = uc;
+            uc = (src & 0xc) << 4;
+            uc |= ((src & 0x3) << 2);
+            *d++ = uc;
         }
     } else if (pDraw->iBpp == 4) { // 4-bit is the native format
-        if (bbep.width() == pDraw->iWidth) { // normal orientation
-            d += pDraw->y * iPitch; // point to the correct line
-            memcpy(d, s, (pDraw->iWidth+1)/2);
-        } else { // rotated
-            d += (bbep.height() - 1) * iPitch;
-            d += (pDraw->y / 2);
-            if (pDraw->y & 1) { // odd line (column)
-                for (x=0; x<pDraw->iWidth; x+=2) {
-                    uc = (d[0] & 0xf0) | (s[0] >> 4);
-                    *d = uc;
-                    d -= iPitch;
-                    uc = (d[0] & 0xf0) | (s[0] & 0xf);
-                    *d = uc;
-                    d -= iPitch;
-                    s++;
-                } // for x
-            } else {
-                for (x=0; x<pDraw->iWidth; x+=2) {
-                    uc = (d[0] & 0xf) | (s[0] & 0xf0);
-                    *d = uc;
-                    d -= iPitch;
-                    uc = (d[0] & 0xf) | (s[0] << 4);
-                    *d = uc;
-                    d -= iPitch;
-                    s++;
-                } // for x
-            }
-        }
+        d += destY * iPitch;
+        d += g_png_offset_x / 2;
+        memcpy(d, s, (pDraw->iWidth+1)/2);
     } else { // must be 8-bit grayscale
-        if (bbep.width() == pDraw->iWidth) { // normal orientation
-            d += pDraw->y * iPitch; // point to the correct line
-            for (x=0; x<pDraw->iWidth; x+=2) {
-                uc = (s[0] & 0xf0) | (s[1] >> 4);
-                *d++ = uc;
-                s += 2;
-            } // for x
-        } else { // rotated
-            d += (bbep.height() - 1) * iPitch;
-            d += (pDraw->y / 2);
-            if (pDraw->y & 1) { // odd line (column)
-                for (x=0; x<pDraw->iWidth; x++) {
-                    uc = (d[0] & 0xf0) | (s[0] >> 4);
-                    *d = uc;
-                    s++;
-                    d -= iPitch;
-                } // for x
-            } else {
-                for (x=0; x<pDraw->iWidth; x++) {
-                    uc = (d[0] & 0xf) | (s[0] & 0xf0);
-                    *d = uc;
-                    s++;
-                    d -= iPitch;
-                } // for x
-            }
+        d += destY * iPitch;
+        d += g_png_offset_x / 2;
+        for (x=0; x<pDraw->iWidth; x+=2) {
+            uc = (s[0] & 0xf0) | (s[1] >> 4);
+            *d++ = uc;
+            s += 2;
         }
     }
     return 1;
@@ -877,6 +812,13 @@ PNG *png = new PNG();
             }
 #else // FastEPD
             bbep.setMode((png->getBpp() == 1) ? BB_MODE_1BPP : BB_MODE_4BPP);
+            g_png_offset_x = (bbep.width() - png->getWidth()) / 2;
+            g_png_offset_y = (bbep.height() - png->getHeight()) / 2;
+            g_png_width = png->getWidth();
+            if (g_png_offset_x > 0 || g_png_offset_y > 0) {
+                bbep.fillScreen(BBEP_WHITE);
+                Log_info("Centering PNG at offset (%d, %d)", g_png_offset_x, g_png_offset_y);
+            }
             png->decode(NULL, 0);
             png->close();
 #endif
@@ -942,6 +884,8 @@ void display_show_image(uint8_t *image_buffer, int data_size, bool bWait)
 #ifdef BB_EPAPER
             bbep.allocBuffer(false);
             bAlloc = true;
+#else
+            bbep.setMode(BB_MODE_4BPP);
 #endif
             int x = (width - pBBB->width)/2;
             int y = (height - pBBB->height)/2; // center it
@@ -953,10 +897,18 @@ void display_show_image(uint8_t *image_buffer, int data_size, bool bWait)
         } 
         else 
         {
+#ifdef BB_EPAPER
          // This work-around is due to a lack of RAM; the correct method would be to use loadBMP()
             flip_image(image_buffer+62, bbep.width(), bbep.height(), false); // fix bottom-up bitmap images
-#ifdef BB_EPAPER
             bbep.setBuffer(image_buffer+62); // uncompressed 1-bpp bitmap
+#else
+            bbep.setMode(BB_MODE_1BPP);
+            int bmpX = (width - 800) / 2;
+            int bmpY = (height - 480) / 2;
+            if (bmpX < 0) bmpX = 0;
+            if (bmpY < 0) bmpY = 0;
+            bbep.fillScreen(BBEP_WHITE);
+            bbep.loadBMP(image_buffer, bmpX, bmpY, BBEP_BLACK, BBEP_WHITE);
 #endif
         }
 #ifdef BB_EPAPER
@@ -1040,6 +992,8 @@ void display_show_msg(uint8_t *image_buffer, MSG message_type)
     Log_info("maximum_compatibility = %d\n", apiDisplayResult.response.maximum_compatibility);
 #ifdef BB_EPAPER
     bbep.allocBuffer(false);
+#else
+    bbep.setMode(BB_MODE_4BPP);
 #endif
     if (image_buffer && *(uint16_t *)image_buffer == BB_BITMAP_MARKER)
     {
@@ -1371,6 +1325,8 @@ void display_show_msg_qa(uint8_t *image_buffer, const float *voltage, const floa
     Log_info("maximum_compatibility = %d\n", apiDisplayResult.response.maximum_compatibility);
 #ifdef BB_EPAPER
     bbep.allocBuffer(false);
+#else
+    bbep.setMode(BB_MODE_4BPP);
 #endif
     if (*(uint16_t *)image_buffer == BB_BITMAP_MARKER)
     {
@@ -1474,6 +1430,8 @@ void display_show_msg(uint8_t *image_buffer, MSG message_type, String friendly_i
 #ifdef BB_EPAPER
     bbep.allocBuffer(false);
     Log_info("Free heap after bbep.allocBuffer() - %d", ESP.getMaxAllocHeap());
+#else
+    bbep.setMode(BB_MODE_4BPP);
 #endif
 
     if (message_type == WIFI_CONNECT)

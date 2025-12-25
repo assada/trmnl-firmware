@@ -1941,7 +1941,11 @@ static float readBatteryVoltage(void)
   #if defined(BOARD_XIAO_EPAPER_DISPLAY) || defined(BOARD_SEEED_RETERMINAL_E1001)
     digitalWrite(PIN_VBAT_SWITCH, (VBAT_SWITCH_LEVEL == HIGH ? LOW : HIGH));
   #endif
+  #if defined(BOARD_M5PAPER_S3)
+    sensorValue = (adc / 8) * 2.15;
+  #else
     sensorValue = (adc / 8) * 2;
+  #endif
     Log.info("%s [%d]: Battery sensorValue = %d\r\n", __FILE__, __LINE__, (int)sensorValue);
     float voltage = sensorValue / 1000.0;
     return voltage;
